@@ -1,5 +1,6 @@
 package com.iot.server;
 
+import com.iot.db.DatabaseConnection;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
@@ -46,6 +47,7 @@ public class HttpServer {
   }
 
   public static void main(String[] args) throws Exception {
+    DatabaseConnection.initializeDatabase();
     new HttpServer(8080).start();
   }
 }

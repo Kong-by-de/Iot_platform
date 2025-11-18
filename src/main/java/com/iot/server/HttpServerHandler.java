@@ -1,6 +1,7 @@
 package com.iot.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.iot.db.TelemetryDao;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -9,37 +10,34 @@ import io.netty.handler.codec.http.*;
 import io.netty.util.CharsetUtil;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Properties;
 
 /**
- * Обработчик HTTP-запросов. Принимает POST-запросы на /telemetry и отправляет данные в Telegram Bot API.
+ * Обработчик HTTP-запросов.
+ * Принимает POST /telemetry, сохраняет данные в БД и пересылает их в C++-сервер (iot_core).
  */
 public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
-  // Создаём HTTP-клиент
   private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(5))
       .build();
 
-  // Токен Telegram-бота
-  private static final String TELEGRAM_BOT_TOKEN = loadTelegramToken();
+  private final TelemetryDao telemetryDao = new TelemetryDao();
 
   /**
    * Обрабатывает входящий HTTP-запрос.
-   * @param ctx Контекст канала.
+   * Поддерживается только POST /telemetry.
+   * @param ctx Контекст канала Netty.
    * @param request Полный HTTP-запрос.
    */
   @Override
   protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
     String uri = request.uri();
     HttpMethod method = request.method();
-
     System.out.println("📥 " + method + " " + uri);
 
     FullHttpResponse response;
@@ -49,11 +47,23 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
         String body = request.content().toString(CharsetUtil.UTF_8);
         TelemetryRequest data = new ObjectMapper().readValue(body, TelemetryRequest.class);
 
-        sendToCppService(data);
-        response = createJsonResponse(HttpResponseStatus.OK, "{\"status\":\"forwarded\"}");
+        // 1. Сохраняем в локальную БД
+        boolean saved = telemetryDao.saveTelemetry(
+            data.getDevice_id(),
+            data.getTemperature(),
+            data.getHumidity()
+        );
 
+        // 2. Отправляем в C++-сервер (iot_core)
+        forwardToCppService(data);
+
+        if (saved) {
+          response = createJsonResponse(HttpResponseStatus.OK, "{\"status\":\"saved_and_forwarded\"}");
+        } else {
+          response = createJsonResponse(HttpResponseStatus.INTERNAL_SERVER_ERROR, "{\"error\":\"DB save failed\"}");
+        }
       } catch (Exception e) {
-        e.printStackTrace(); // ОК: локальная отладка
+        e.printStackTrace();
         response = createJsonResponse(HttpResponseStatus.BAD_REQUEST, "{\"error\":\"Invalid telemetry\"}");
       }
     } else {
@@ -64,61 +74,43 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
   }
 
   /**
-   * Пересылает данные телеметрии на C++-сервер.
+   * Отправляет телеметрию в C++-сервер (iot_core) по HTTP.
    * @param data Данные телеметрии.
    * @throws IOException если возникла ошибка ввода-вывода.
    * @throws InterruptedException если поток был прерван.
    */
-  private void sendToCppService(TelemetryRequest data) throws IOException, InterruptedException {
-    // Преобразуем телеметрию в JSON
+  private void forwardToCppService(TelemetryRequest data) throws IOException, InterruptedException {
     ObjectMapper mapper = new ObjectMapper();
     String jsonBody = mapper.writeValueAsString(data);
 
-    // Отправляем на C++ сервер
+    // ⚠️ Замените IP на реальный адрес ноутбука с iot_core
+    String url = "http://192.168.1.35:8080/telemetry";
+
     HttpRequest request = HttpRequest.newBuilder()
-        .uri(URI.create("http://192.168.1.35:8080/telemetry"))
+        .uri(URI.create(url))
         .header("Content-Type", "application/json")
         .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
         .build();
 
     HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-    System.out.println("📨 Отправлено в C++-сервис: " + response.statusCode());
+    System.out.println("📨 iot_core response: " + response.statusCode());
   }
 
   /**
-   * Создаёт HTTP-ответ с указанным статусом и телом.
-   * @param status Статус ответа.
-   * @param body Тело ответа в формате JSON.
-   * @return HTTP-ответ.
+   * Создаёт HTTP-ответ с заданным статусом и телом в формате JSON.
+   * @param status HTTP-статус ответа.
+   * @param body Тело ответа в виде JSON-строки.
+   * @return Сформированный HTTP-ответ.
    */
   private FullHttpResponse createJsonResponse(HttpResponseStatus status, String body) {
     FullHttpResponse res = new DefaultFullHttpResponse(
-        HttpVersion.HTTP_1_1, status,
+        HttpVersion.HTTP_1_1,
+        status,
         Unpooled.copiedBuffer(body, CharsetUtil.UTF_8)
     );
     res.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
     res.headers().set(HttpHeaderNames.CONTENT_LENGTH, res.content().readableBytes());
     return res;
-  }
-
-  /**
-   * Загружает токен Telegram-бота из файла application.properties.
-   * @return Токен бота.
-   * @throws RuntimeException если файл properties не найден или токен не задан.
-   */
-  private static String loadTelegramToken() {
-    try (InputStream is = HttpServerHandler.class.getClassLoader()
-        .getResourceAsStream("application.properties")) {
-      Properties props = new Properties();
-      props.load(is);
-      String token = props.getProperty("telegram.bot.token");
-      if (token == null || token.trim().isEmpty()) {
-        throw new RuntimeException("Параметр 'telegram.bot.token' не задан в application.properties");
-      }
-      return token;
-    } catch (Exception e) {
-      throw new RuntimeException("Не удалось загрузить telegram.bot.token", e);
-    }
   }
 
   /**

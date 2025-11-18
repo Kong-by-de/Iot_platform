@@ -1,5 +1,6 @@
 package com.iot.server;
 
+import com.iot.db.DatabaseConnection;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
@@ -12,13 +13,14 @@ import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 
 /**
- * Главный класс приложения. Запускает HTTP-сервер на указанном порту.
+ * Главный класс приложения. Запускает HTTP-сервер на Netty.
  */
 public class HttpServer {
+
   private final int port;
 
   /**
-   * Конструктор.
+   * Конструктор HTTP-сервера.
    * @param port Порт, на котором будет работать сервер.
    */
   public HttpServer(int port) {
@@ -26,8 +28,8 @@ public class HttpServer {
   }
 
   /**
-   * Запускает сервер.
-   * @throws Exception если произошла ошибка при запуске сервера.
+   * Запускает сервер и ожидает завершения.
+   * @throws Exception если произошла ошибка при запуске.
    */
   public void start() throws Exception {
     EventLoopGroup bossGroup = new NioEventLoopGroup();
@@ -58,11 +60,13 @@ public class HttpServer {
   }
 
   /**
-   * Точка входа в программу.
+   * Точка входа в приложение.
+   * Инициализирует БД и запускает сервер на порту 8081.
    * @param args Аргументы командной строки (не используются).
-   * @throws Exception если произошла ошибка при запуске сервера.
+   * @throws Exception если произошла ошибка при запуске.
    */
   public static void main(String[] args) throws Exception {
+    DatabaseConnection.initializeDatabase();
     new HttpServer(8081).start();
   }
 }

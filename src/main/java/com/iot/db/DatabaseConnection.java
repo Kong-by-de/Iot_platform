@@ -9,20 +9,22 @@ import java.sql.Statement;
 import java.util.Properties;
 
 /**
- * Класс для управления соединением с базой данных PostgreSQL.
- * На текущем этапе используется только для инициализации таблиц.
+ * Класс для управления соединением с PostgreSQL и инициализации таблиц.
+ * Использует параметры из application.properties.
  */
 public class DatabaseConnection {
+
   private static final Properties props = new Properties();
 
   static {
-    try (InputStream input = DatabaseConnection.class.getClassLoader().getResourceAsStream("application.properties")) {
+    try (InputStream input = DatabaseConnection.class.getClassLoader()
+        .getResourceAsStream("application.properties")) {
       if (input == null) {
-        throw new RuntimeException("Unable to find application.properties");
+        throw new RuntimeException("Файл application.properties не найден в classpath.");
       }
       props.load(input);
     } catch (IOException e) {
-      throw new RuntimeException("Error loading properties", e);
+      throw new RuntimeException("Не удалось загрузить файл application.properties: " + e.getMessage(), e);
     }
   }
 
@@ -30,60 +32,63 @@ public class DatabaseConnection {
   private static final String USER = props.getProperty("db.user");
   private static final String PASSWORD = props.getProperty("db.password");
 
+  static {
+    if (URL == null || URL.trim().isEmpty()) {
+      throw new RuntimeException("Параметр 'db.url' не задан в application.properties");
+    }
+    if (USER == null || USER.trim().isEmpty()) {
+      throw new RuntimeException("Параметр 'db.user' не задан в application.properties");
+    }
+    if (PASSWORD == null) {
+      throw new RuntimeException("Параметр 'db.password' не задан в application.properties");
+    }
+  }
+
   /**
-   * Получает новое соединение с базой данных.
-   * @return Соединение с базой данных.
+   * Создаёт новое соединение с базой данных.
+   * @return Новое соединение с PostgreSQL.
    * @throws RuntimeException если подключение не удалось.
    */
   public static Connection getConnection() {
     try {
       Connection conn = DriverManager.getConnection(URL, USER, PASSWORD);
-      System.out.println("✅ Успешное подключение к PostgreSQL!");
+      System.out.println("✅ Подключение к БД успешно");
       return conn;
     } catch (SQLException e) {
-      System.err.println("❌ Ошибка подключения к базе данных:");
-      throw new RuntimeException("Не удалось подключиться к базе данных", e);
+      throw new RuntimeException(
+          "Не удалось подключиться к базе данных по адресу: " + URL +
+              ". Проверьте, что PostgreSQL запущен и параметры подключения верны.",
+          e
+      );
     }
   }
 
   /**
-   * Инициализирует базу данных, создавая таблицы users и devices, если они не существуют.
+   * Инициализирует базу данных: создаёт таблицу telemetry, если она отсутствует.
+   * Вызывается при старте приложения.
+   * @throws RuntimeException если не удалось создать таблицу.
    */
   public static void initializeDatabase() {
     try (Connection conn = getConnection();
          Statement stmt = conn.createStatement()) {
 
-      // 1. Создаём таблицу users
-      String createUsersTableSQL = """
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL,
-                    email VARCHAR(100) UNIQUE NOT NULL
+      String createTelemetryTableSQL = """
+                CREATE TABLE IF NOT EXISTS telemetry (
+                    id BIGSERIAL PRIMARY KEY,
+                    device_id VARCHAR(100) NOT NULL,
+                    temperature DOUBLE PRECISION NOT NULL,
+                    humidity DOUBLE PRECISION NOT NULL,
+                    recorded_at TIMESTAMPTZ DEFAULT NOW()
                 );
                 """;
-      stmt.execute(createUsersTableSQL);
-      System.out.println("✅ Таблица 'users' создана или уже существует.");
-
-      // 2. Создаём таблицу devices
-      String createDevicesTableSQL = """
-                CREATE TABLE IF NOT EXISTS devices (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL,
-                    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    type VARCHAR(50) NOT NULL
-                );
-                """; /* ON DELETE CASCADE - Если удалится пользователь через DELETE FROM users WHERE id = ?
-                 все его устройства автоматически удалятся из таблицы devices */
-      stmt.execute(createDevicesTableSQL);
-      System.out.println("✅ Таблица 'devices' создана или уже существует.");
+      stmt.execute(createTelemetryTableSQL);
+      System.out.println("✅ Таблица 'telemetry' создана или уже существует.");
 
     } catch (SQLException e) {
-      System.err.println("❌ Ошибка при создании таблиц:");
-      throw new RuntimeException("Описание ошибки", e);
+      throw new RuntimeException(
+          "Не удалось инициализировать базу данных. Ошибка при создании таблицы 'telemetry'.",
+          e
+      );
     }
   }
 }
-
-/*
-docker run --name iot-postgres -e POSTGRES_DB=iot_db -e POSTGRES_USER=iot_user -e POSTGRES_PASSWORD=iot_pass -p 5432:5432 -d postgres:16
-*/

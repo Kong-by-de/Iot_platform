@@ -64,31 +64,25 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
   }
 
   /**
-   * Отправляет данные телеметрии в Telegram Bot API.
+   * Пересылает данные телеметрии на C++-сервер.
    * @param data Данные телеметрии.
    * @throws IOException если возникла ошибка ввода-вывода.
    * @throws InterruptedException если поток был прерван.
    */
   private void sendToCppService(TelemetryRequest data) throws IOException, InterruptedException {
-    // Используем %s, потому что device_id — это String
-    String message = String.format(
-        "🌡️ Новые данные:\nУстройство: %s\nТемпература: %.1f°C\nВлажность: %.1f%%",
-        data.getDevice_id(),      // ← %s для String
-        data.getTemperature(),    // ← %.1f для double
-        data.getHumidity()        // ← %.1f для double
-    );
+    // Преобразуем телеметрию в JSON
+    ObjectMapper mapper = new ObjectMapper();
+    String jsonBody = mapper.writeValueAsString(data);
 
-    String url = "http://192.168.1.32:8080/send-notification";
-    String json = String.format("{\"text\": \"%s\"}", message.replace("\"", "\\\""));
-
-    HttpRequest req = HttpRequest.newBuilder()
-        .uri(URI.create(url))
+    // Отправляем на C++ сервер
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create("http://192.168.1.35:8080/telemetry"))
         .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(json))
+        .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
         .build();
 
-    HttpResponse<String> res = HTTP_CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
-    System.out.println("📤 Telegram response: " + res.statusCode());
+    HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+    System.out.println("📨 Отправлено в C++-сервис: " + response.statusCode());
   }
 
   /**

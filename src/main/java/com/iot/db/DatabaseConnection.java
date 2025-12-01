@@ -46,17 +46,30 @@ public class DatabaseConnection {
 
   /**
    * Создаёт новое соединение с базой данных.
+   * <p>
+   * Если в системных свойствах задан параметр 'db.url', используется он.
+   * Иначе — берётся из application.properties.
+   *
    * @return Новое соединение с PostgreSQL.
    * @throws RuntimeException если подключение не удалось.
    */
   public static Connection getConnection() {
+    String url = System.getProperty("db.url"); // ← Сначала пробуем системное свойство
+    if (url == null || url.trim().isEmpty()) {
+      url = props.getProperty("db.url"); // ← Потом из properties
+    }
+
+    if (url == null || url.trim().isEmpty()) {
+      throw new RuntimeException("Параметр 'db.url' не задан ни в системных свойствах, ни в application.properties");
+    }
+
     try {
-      Connection conn = DriverManager.getConnection(URL, USER, PASSWORD);
+      Connection conn = DriverManager.getConnection(url, USER, PASSWORD);
       System.out.println("✅ Подключение к БД успешно");
       return conn;
     } catch (SQLException e) {
       throw new RuntimeException(
-          "Не удалось подключиться к базе данных по адресу: " + URL +
+          "Не удалось подключиться к базе данных по адресу: " + url +
               ". Проверьте, что PostgreSQL запущен и параметры подключения верны.",
           e
       );

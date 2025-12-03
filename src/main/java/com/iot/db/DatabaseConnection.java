@@ -1,5 +1,7 @@
 package com.iot.db;
 
+import com.iot.config.Config;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.sql.Connection;
@@ -28,9 +30,9 @@ public class DatabaseConnection {
     }
   }
 
-  private static final String URL = props.getProperty("db.url");
-  private static final String USER = props.getProperty("db.user");
-  private static final String PASSWORD = props.getProperty("db.password");
+  private static final String URL = Config.getRequiredProperty("db.url");
+  private static final String USER = Config.getRequiredProperty("db.user");
+  private static final String PASSWORD = Config.getRequiredProperty("db.password");
 
   static {
     if (URL == null || URL.trim().isEmpty()) {

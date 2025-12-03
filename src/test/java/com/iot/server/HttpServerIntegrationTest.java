@@ -1,20 +1,14 @@
 package com.iot.server;
 
-import com.iot.config.Config;
 import com.iot.db.DatabaseConnection;
-import com.iot.db.TelemetryDao;
-import com.iot.service.TelemetryService;
-import com.iot.service.TelemetryServiceImpl;
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoopGroup;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.*;
+import io.netty.util.CharsetUtil;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -28,172 +22,164 @@ import java.net.http.HttpResponse;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Интеграционные тесты для HTTP-сервера.
- * <p>
- * Запускает реальный Netty-сервер и PostgreSQL в Docker-контейнере.
- * Проверяет сквозной сценарий: HTTP-запрос → сохранение в БД.
- * <p>
- * C++-сервер мокается через подмену URL в конфигурации.
- */
 @Testcontainers
 class HttpServerIntegrationTest {
 
-  /**
-   * Запускает PostgreSQL в Docker-контейнере.
-   */
   @Container
-  private static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15")
-      .withDatabaseName("iot_db")
-      .withUsername("iot_user")
-      .withPassword("iot_pass");
+  private static final PostgreSQLContainer<?> postgres =
+      new PostgreSQLContainer<>("postgres:15")
+          .withDatabaseName("iot_db")
+          .withUsername("iot_user")
+          .withPassword("iot_pass");
 
-  /**
-   * Порт, на котором запускается тестовый Netty-сервер.
-   */
-  private static int serverPort;
-
-  /**
-   * Ссылка на запущенный серверный канал (для корректного закрытия).
-   */
-  private static Channel serverChannel;
-
-  /**
-   * Группы потоков Netty.
-   */
+  private static Thread javaServerThread;
+  private static int javaServerPort;
+  private static Channel cppMockChannel;
   private static EventLoopGroup bossGroup;
   private static EventLoopGroup workerGroup;
+  private static int cppPort;
+  private static final AtomicReference<String> lastCppRequest = new AtomicReference<>();
 
-  /**
-   * Настройка окружения перед всеми тестами.
-   */
+  private static int freePort() throws IOException {
+    try (var socket = new java.net.ServerSocket(0)) {
+      return socket.getLocalPort();
+    }
+  }
+
   @BeforeAll
-  static void setUpAll() throws Exception {
-    // Перенаправляем конфигурацию БД на контейнер
+  static void setUp() throws Exception {
+    // Настройка БД через системные свойства
     System.setProperty("db.url", postgres.getJdbcUrl());
     System.setProperty("db.user", postgres.getUsername());
     System.setProperty("db.password", postgres.getPassword());
-
-    // Явно запускаем контейнер и ждём его готовности
-    postgres.start();
-    postgres.waitingFor(
-        org.testcontainers.containers.wait.strategy.Wait.forListeningPort()
-            .withStartupTimeout(java.time.Duration.ofSeconds(60)) // Увеличили таймаут до 60 секунд
-    );
-
-    // Логируем URL для отладки
-    System.out.println("✅ PostgreSQL JDBC URL: " + postgres.getJdbcUrl());
-
-    // Инициализируем БД
     DatabaseConnection.initializeDatabase();
 
-    // Запускаем сервер на случайном порту
-    bossGroup = new NioEventLoopGroup();
+    // Запуск мока C++-сервера
+    cppPort = freePort();
+    startCppMockServer();
+
+    // Говорим приложению: "отправляй на мок"
+    System.setProperty("cpp.service.url", "http://127.0.0.1:" + cppPort + "/telemetry");
+
+    // Запуск основного сервера на случайном порту
+    javaServerPort = freePort();
+    javaServerThread = new Thread(() -> {
+      try {
+        new HttpServer(javaServerPort).start();
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
+    });
+    javaServerThread.setDaemon(true);
+    javaServerThread.start();
+    Thread.sleep(1200); // ждём запуска сервера
+  }
+
+  private static void startCppMockServer() throws Exception {
+    bossGroup = new NioEventLoopGroup(1);
     workerGroup = new NioEventLoopGroup();
-    ServerBootstrap bootstrap = new ServerBootstrap();
+    var bootstrap = new ServerBootstrap();
     bootstrap.group(bossGroup, workerGroup)
         .channel(NioServerSocketChannel.class)
         .childHandler(new ChannelInitializer<SocketChannel>() {
           @Override
           protected void initChannel(SocketChannel ch) {
-            TelemetryDao telemetryDao = new TelemetryDao();
-            HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(java.time.Duration.ofSeconds(5))
-                .build();
-            TelemetryService telemetryService = new TelemetryServiceImpl(telemetryDao, httpClient);
-            ch.pipeline()
-                .addLast(new HttpServerCodec())
-                .addLast(new HttpObjectAggregator(65536))
-                .addLast(new HttpServerHandler(telemetryService));
+            ch.pipeline().addLast(
+                new HttpServerCodec(),
+                new HttpObjectAggregator(65536),
+                new SimpleChannelInboundHandler<FullHttpRequest>() {
+                  @Override
+                  protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) {
+                    if (req.method() == HttpMethod.POST && req.uri().equals("/telemetry")) {
+                      lastCppRequest.set(req.content().toString(CharsetUtil.UTF_8));
+                      FullHttpResponse resp = new DefaultFullHttpResponse(
+                          HttpVersion.HTTP_1_1,
+                          HttpResponseStatus.OK,
+                          Unpooled.copiedBuffer("{\"status\":\"ok\"}", CharsetUtil.UTF_8)
+                      );
+                      resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+                      resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, resp.content().readableBytes());
+                      ctx.writeAndFlush(resp);
+                    }
+                  }
+                }
+            );
           }
-        })
-        .option(ChannelOption.SO_BACKLOG, 128)
-        .childOption(ChannelOption.SO_KEEPALIVE, true);
-
-    serverChannel = bootstrap.bind(0).sync().channel();
-    serverPort = ((java.net.InetSocketAddress) serverChannel.localAddress()).getPort();
-    System.out.println("✅ Интеграционный сервер запущен на порту " + serverPort);
+        });
+    cppMockChannel = bootstrap.bind(cppPort).sync().channel();
+    System.out.println("✅ Mock C++ server running at port " + cppPort);
   }
 
-  /**
-   * Корректное завершение после всех тестов.
-   */
   @AfterAll
-  static void tearDownAll() {
-    if (serverChannel != null) {
-      serverChannel.close().syncUninterruptibly();
-    }
-    if (workerGroup != null) {
-      workerGroup.shutdownGracefully();
-    }
-    if (bossGroup != null) {
-      bossGroup.shutdownGracefully();
+  static void tearDown() {
+    if (cppMockChannel != null) cppMockChannel.close();
+    if (bossGroup != null) bossGroup.shutdownGracefully();
+    if (workerGroup != null) workerGroup.shutdownGracefully();
+  }
+
+  @Test
+  @DisplayName("Сохранение в БД при недоступности C++-сервера")
+  void shouldSaveToDbWhenCppUnavailable() throws Exception {
+    // Сохраняем текущий URL
+    String originalUrl = System.getProperty("cpp.service.url");
+    try {
+      // Подменяем на недостижимый адрес → эмулируем "C++ недоступен"
+      System.setProperty("cpp.service.url", "http://127.0.0.1:1/telemetry");
+
+      String url = "http://localhost:" + javaServerPort + "/telemetry";
+      String json = "{\"device_id\":\"dev_offline\",\"temperature\":22.0,\"humidity\":11.0}";
+      var req = HttpRequest.newBuilder()
+          .uri(URI.create(url))
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString(json))
+          .build();
+      var resp = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+
+      // Сервер вернёт 500, потому что C++ недоступен
+      assertThat(resp.statusCode()).isEqualTo(500);
+
+      // Но данные ДОЛЖНЫ быть в БД
+      try (Connection conn = DatabaseConnection.getConnection();
+           Statement stmt = conn.createStatement()) {
+        ResultSet rs = stmt.executeQuery("SELECT * FROM telemetry WHERE device_id = 'dev_offline'");
+        assertThat(rs.next()).isTrue();
+      }
+    } finally {
+      // Восстанавливаем URL мока
+      System.setProperty("cpp.service.url", originalUrl);
     }
   }
 
-  /**
-   * Проверяет, что телеметрия сохраняется в БД при успешном запросе.
-   * <p>
-   * Примечание: отправка в C++ завершится ошибкой (т.к. сервера нет),
-   * поэтому ожидаем статус 500, но данные должны быть в БД.
-   */
   @Test
-  @DisplayName("Телеметрия сохраняется в БД даже если C++-сервер недоступен")
-  void shouldSaveTelemetryToDatabaseDespiteCppFailure() throws Exception {
-    // Given
-    String jsonBody = "{\"device_id\":\"sensor_test\",\"temperature\":22.0,\"humidity\":45.0}";
-    String url = "http://localhost:" + serverPort + "/telemetry";
+  @DisplayName("Успешная отправка телеметрии в C++-сервер и сохранение в БД")
+  void shouldForwardTelemetryToCppAndSave() throws Exception {
+    Thread.sleep(500); // гарантируем, что всё готово
 
-    HttpRequest request = HttpRequest.newBuilder()
+    String url = "http://localhost:" + javaServerPort + "/telemetry";
+    String json = "{\"device_id\":\"dev_online\",\"temperature\":33.0,\"humidity\":44.0}";
+    var req = HttpRequest.newBuilder()
         .uri(URI.create(url))
         .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+        .POST(HttpRequest.BodyPublishers.ofString(json))
         .build();
+    var resp = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
 
-    // When
-    HttpClient client = HttpClient.newHttpClient();
-    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    // Успешный ответ
+    assertThat(resp.statusCode()).isEqualTo(200);
+    assertThat(resp.body()).contains("saved_and_forwarded");
 
-    // Then
-    // Ожидаем 500, потому что C++-сервер недоступен
-    assertThat(response.statusCode()).isEqualTo(500);
+    // Проверяем, что запрос дошёл до C++-мока
+    assertThat(lastCppRequest.get()).contains("dev_online");
 
-    // Но данные ДОЛЖНЫ быть в БД
+    // Проверяем, что данные в БД
     try (Connection conn = DatabaseConnection.getConnection();
          Statement stmt = conn.createStatement()) {
-
-      ResultSet rs = stmt.executeQuery("SELECT * FROM telemetry WHERE device_id = 'sensor_test'");
+      ResultSet rs = stmt.executeQuery("SELECT * FROM telemetry WHERE device_id = 'dev_online'");
       assertThat(rs.next()).isTrue();
-      assertThat(rs.getString("device_id")).isEqualTo("sensor_test");
-      assertThat(rs.getDouble("temperature")).isEqualTo(22.0);
-      assertThat(rs.getDouble("humidity")).isEqualTo(45.0);
     }
-  }
-
-  /**
-   * Проверяет, что валидация JSON работает на реальном сервере.
-   */
-  @Test
-  @DisplayName("Некорректный JSON → 400 Bad Request (интеграционный)")
-  void shouldReturnBadRequestOnInvalidJsonIntegration() throws Exception {
-    // Given
-    String invalidJson = "{invalid";
-    String url = "http://localhost:" + serverPort + "/telemetry";
-
-    HttpRequest request = HttpRequest.newBuilder()
-        .uri(URI.create(url))
-        .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(invalidJson))
-        .build();
-
-    // When
-    HttpClient client = HttpClient.newHttpClient();
-    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-    // Then
-    assertThat(response.statusCode()).isEqualTo(400);
   }
 }

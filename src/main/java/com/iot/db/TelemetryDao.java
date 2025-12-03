@@ -15,7 +15,7 @@ public class TelemetryDao {
    * @param device_id Идентификатор устройства.
    * @param temperature Значение температуры.
    * @param humidity Значение влажности.
-   * @return true, если запись успешно сохранена; false в случае ошибки.
+   * @return true, если запись успешно сохранена; выброс exception в случае ошибки.
    */
   public boolean saveTelemetry(String device_id, double temperature, double humidity) {
     String sql = "INSERT INTO telemetry (device_id, temperature, humidity) VALUES (?, ?, ?)";

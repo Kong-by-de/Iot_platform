@@ -68,13 +68,13 @@ public class TelemetryServiceImpl implements TelemetryService {
 
   private void forwardToCppService(TelemetryRequest data) throws IOException, InterruptedException {
     String jsonBody = objectMapper.writeValueAsString(data);
-    String url = Config.getCppServiceUrl();
+    String url = Config.getRequiredProperty("cpp.service.url");
 
     HttpRequest request = HttpRequest.newBuilder()
         .uri(URI.create(url))
         .header("Content-Type", "application/json")
         .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-        .timeout(Duration.ofSeconds(5))
+        .timeout(Duration.ofSeconds(10))
         .build();
 
     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

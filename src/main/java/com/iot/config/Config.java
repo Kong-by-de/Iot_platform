@@ -5,40 +5,52 @@ import java.io.InputStream;
 import java.util.Properties;
 
 /**
- * Утилитарный класс для загрузки конфигурационных параметров из файла application.properties.
+ * Утилитарный класс для загрузки конфигурации из application.properties.
  * <p>
- * Все параметры загружаются при старте приложения и доступны через статические методы.
+ * Все параметры читаются из classpath-файла "application.properties".
+ * Поддерживает обязательные и опциональные параметры.
  */
-public class Config {
+public final class Config {
 
-  /**
-   * Статический объект Properties, содержащий все настройки из application.properties.
-   */
-  private static final Properties props = new Properties();
+  private static final Properties PROPS = new Properties();
 
   static {
     try (InputStream input = Config.class.getClassLoader()
         .getResourceAsStream("application.properties")) {
       if (input == null) {
-        throw new RuntimeException("Файл application.properties не найден в classpath.");
+        throw new IllegalStateException("Файл application.properties не найден в classpath.");
       }
-      props.load(input);
+      PROPS.load(input);
     } catch (IOException e) {
-      throw new RuntimeException("Не удалось загрузить application.properties", e);
+      throw new IllegalStateException("Не удалось загрузить application.properties", e);
     }
   }
 
   /**
-   * Получает URL C++-сервера (iot_core) из конфигурации.
+   * Возвращает значение обязательного параметра по ключу.
+   * <p>
+   * Если параметр отсутствует или пуст — бросает исключение.
    *
-   * @return URL сервера в виде строки, например "http://localhost:8080/telemetry".
-   * @throws RuntimeException если параметр 'cpp.service.url' не задан или пуст.
+   * @param key Ключ параметра (например, "cpp.service.url").
+   * @return Непустое строковое значение.
+   * @throws IllegalStateException если параметр не задан или пуст.
    */
-  public static String getCppServiceUrl() {
-    String url = props.getProperty("cpp.service.url");
-    if (url == null || url.trim().isEmpty()) {
-      throw new RuntimeException("Не задан параметр 'cpp.service.url' в application.properties");
+  public static String getRequiredProperty(String key) {
+    // Сначала пробуем системное свойство
+    String sysValue = System.getProperty(key);
+    if (sysValue != null && !sysValue.trim().isEmpty()) {
+      return sysValue.trim();
     }
-    return url.trim();
+    // Иначе — из application.properties
+    String propValue = PROPS.getProperty(key);
+    if (propValue == null || propValue.trim().isEmpty()) {
+      throw new IllegalStateException("Обязательный параметр '" + key + "' не задан ни в системных свойствах, ни в application.properties");
+    }
+    return propValue.trim();
+  }
+
+  // Запрещаем создание экземпляров
+  private Config() {
+    throw new UnsupportedOperationException("Utility class");
   }
 }

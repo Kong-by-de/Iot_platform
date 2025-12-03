@@ -20,59 +20,65 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Модульные тесты для класса {@link HttpServerHandler}.
+ * Модульные тесты для HttpServerHandler.
  * <p>
- * Проверяют обработку HTTP-запросов с использованием мока сервиса {@link TelemetryService}.
- * Внешние зависимости полностью изолированы.
+ * Проверяют HTTP-уровень: парсинг запроса, валидацию, формирование ответа.
+ * Бизнес-логика (TelemetryService) замокана, но проверяется,
+ * что в неё передаются корректные данные.
  */
 class HttpServerHandlerTest {
 
-  /**
-   * Мок сервиса обработки телеметрии.
-   */
   @Mock
   private TelemetryService telemetryService;
 
-  /**
-   * Мок контекста канала Netty.
-   */
   @Mock
   private ChannelHandlerContext ctx;
 
-  /**
-   * Мок промиса канала.
-   */
   @Mock
   private ChannelPromise channelPromise;
 
-  /**
-   * Тестируемый обработчик.
-   */
   private HttpServerHandler handler;
 
-  /**
-   * ObjectMapper для подготовки JSON-тела.
-   */
-  private final ObjectMapper mapper = new ObjectMapper();
-
-  /**
-   * Инициализация моков перед каждым тестом.
-   */
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
     handler = new HttpServerHandler(telemetryService);
 
+    // Настраиваем моки так, чтобы ctx.writeAndFlush не падал
     when(ctx.writeAndFlush(any())).thenReturn(channelPromise);
     when(channelPromise.addListener(any())).thenReturn(channelPromise);
   }
 
-  /**
-   * Проверяет успешную обработку телеметрии → 200 OK.
-   */
   @Test
-  @DisplayName("Успешная обработка телеметрии → 200 OK")
-  void shouldReturnOkWhenProcessingSucceeds() {
+  @DisplayName("Валидный POST /telemetry → вызывает service с корректными данными")
+  void shouldParseValidJsonAndPassToService() throws Exception {
+    // Given
+    String jsonBody = "{\"device_id\":\"sensor_01\",\"temperature\":25.5,\"humidity\":60.0}";
+    FullHttpRequest request = new DefaultFullHttpRequest(
+        HttpVersion.HTTP_1_1,
+        HttpMethod.POST,
+        "/telemetry",
+        Unpooled.wrappedBuffer(jsonBody.getBytes(StandardCharsets.UTF_8))
+    );
+    request.headers().set(HttpHeaderNames.CONTENT_LENGTH, jsonBody.length());
+    request.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+
+    // When
+    handler.channelRead0(ctx, request);
+
+    // Then: проверяем, что service вызван с правильным объектом
+    ArgumentCaptor<TelemetryRequest> captor = ArgumentCaptor.forClass(TelemetryRequest.class);
+    verify(telemetryService).processTelemetry(captor.capture());
+
+    TelemetryRequest data = captor.getValue();
+    assertThat(data.getDevice_id()).isEqualTo("sensor_01");
+    assertThat(data.getTemperature()).isEqualTo(25.5);
+    assertThat(data.getHumidity()).isEqualTo(60.0);
+  }
+
+  @Test
+  @DisplayName("Валидный запрос + service вернул true → 200 OK")
+  void shouldReturn200WhenServiceReturnsTrue() throws Exception {
     // Given
     String jsonBody = "{\"device_id\":\"sensor_01\",\"temperature\":25.5,\"humidity\":60.0}";
     FullHttpRequest request = new DefaultFullHttpRequest(
@@ -99,12 +105,9 @@ class HttpServerHandlerTest {
     assertThat(content).contains("\"status\":\"saved_and_forwarded\"");
   }
 
-  /**
-   * Проверяет, что ошибка в сервисе → 500.
-   */
   @Test
-  @DisplayName("Ошибка в сервисе → 500 Internal Server Error")
-  void shouldReturnInternalServerErrorWhenProcessingFails() {
+  @DisplayName("Валидный запрос + service вернул false → 500 Internal Server Error")
+  void shouldReturn500WhenServiceReturnsFalse() throws Exception {
     // Given
     String jsonBody = "{\"device_id\":\"sensor_01\",\"temperature\":25.5,\"humidity\":60.0}";
     FullHttpRequest request = new DefaultFullHttpRequest(
@@ -131,12 +134,9 @@ class HttpServerHandlerTest {
     assertThat(content).contains("\"error\":\"Processing failed\"");
   }
 
-  /**
-   * Проверяет обработку некорректного JSON → 400.
-   */
   @Test
-  @DisplayName("Некорректный JSON → 400 Bad Request")
-  void shouldReturnBadRequestWhenInvalidJson() {
+  @DisplayName("Невалидный JSON → 400 Bad Request")
+  void shouldReturn400WhenJsonIsInvalid() {
     // Given
     String invalidJson = "{invalid";
     FullHttpRequest request = new DefaultFullHttpRequest(
@@ -159,12 +159,9 @@ class HttpServerHandlerTest {
     assertThat(content).contains("\"error\":\"Invalid telemetry\"");
   }
 
-  /**
-   * Проверяет неизвестный путь → 404.
-   */
   @Test
-  @DisplayName("Неизвестный путь → 404 Not Found")
-  void shouldReturnNotFoundForUnknownPath() {
+  @DisplayName("Неверный URI → 404 Not Found")
+  void shouldReturn404ForUnknownPath() {
     // Given
     FullHttpRequest request = new DefaultFullHttpRequest(
         HttpVersion.HTTP_1_1,

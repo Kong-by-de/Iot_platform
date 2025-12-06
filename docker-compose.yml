@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: iot_postgres
+    environment:
+      POSTGRES_DB: iot_devices
+      POSTGRES_USER: iot_user
+      POSTGRES_PASSWORD: pass2025
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+  dbmate:
+    image: ghcr.io/amacneil/dbmate:latest
+    container_name: iot_dbmate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://iot_user:pass2025@postgres:5432/iot_devices?sslmode=disable"
+    volumes:
+      - ./db:/db
+    command: >
+      sh -c "
+        echo '🚀 Running database migrations...' &&
+        dbmate up &&
+        echo '🌱 Seeding initial data...' &&
+        psql $$DATABASE_URL -f /db/init.sql
+      "
+  
+  app:
+    build: .
+    container_name: iot_app
+    depends_on:
+      - dbmate
+    environment:
+      DATABASE_URL: "postgres://iot_user:pass2025@postgres:5432/iot_devices?sslmode=disable"
+    ports:
+      - "8080:8080"
+    command: ["./IoTPlatform"]
+
+volumes:
+  postgres_data:

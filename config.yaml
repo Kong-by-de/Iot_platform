@@ -1,0 +1,52 @@
+# IoT Core Configuration
+system:
+  name: "IoT Core Platform"
+  version: "2.0.0"
+  environment: "development"
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "iot_devices"
+  user: "iot_user"
+  password: "pass2025"
+  max_connections: 10
+  connection_timeout: 30
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  threads: 4
+  timeout: 30
+  cors_enabled: true
+
+telegram:
+  enabled: true
+  token: ""
+  parse_mode: "Markdown"
+
+email:
+  enabled: false
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  username: ""
+  password: ""
+  from_address: ""
+  recipients: []
+
+simulation:
+  enabled: true
+  device_count: 3
+  update_interval_ms: 10000
+  failure_probability: 0.01
+
+logging:
+  level: "INFO"
+  file: "logs/iot_core.log"
+  max_size_mb: 10
+  max_files: 5
+
+alerts:
+  cache_duration_minutes: 5
+  max_alerts_per_hour: 60
+  cooldown_seconds: 300

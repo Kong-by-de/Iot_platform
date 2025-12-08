@@ -109,9 +109,29 @@ void TelegramBotHandler::startPolling(const std::string& botToken) {
 
                       it->second(chatId, args);
                     } else {
-                      sendMessage(chatId,
-                                  "❓ Неизвестная команда. Используй /start "
-                                  "для помощи");
+                      // Показываем список доступных команд
+                      std::string helpMessage = "❓ Неизвестная команда.\n\n";
+                      helpMessage += "📋 *Доступные команды:*\n";
+                      helpMessage += "/start - Начало работы\n";
+                      helpMessage += "/status - Статус системы\n";
+                      helpMessage += "/last - Последние данные\n";
+                      helpMessage += "/addDevice - Добавить устройство\n";
+                      helpMessage += "/myDevices - Мои устройства\n";
+                      helpMessage +=
+                          "/setTempHigh - Установить макс. температуру\n";
+                      helpMessage +=
+                          "/setTempLow - Установить мин. температуру\n";
+                      helpMessage +=
+                          "/setHumHigh - Установить макс. влажность\n";
+                      helpMessage += "/setHumLow - Установить мин. влажность\n";
+                      helpMessage += "/showAlerts - Показать настройки\n";
+                      helpMessage += "/clearAlerts - Очистить настройки\n";
+                      helpMessage += "/testHot - Тест высокой температуры\n";
+                      helpMessage += "/testCold - Тест низкой температуры\n";
+                      helpMessage += "/testHumid - Тест высокой влажности\n";
+                      helpMessage += "/testDry - Тест низкой влажности\n";
+
+                      sendMessage(chatId, helpMessage);
                     }
                   } else {
                     sendMessage(
@@ -199,10 +219,10 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/add_device",
+      {"/addDevice",
        [this](long chatId, const auto& args) {
          if (args.empty()) {
-           sendMessage(chatId, "❌ Использование: /add_device <device_id>");
+           sendMessage(chatId, "❌ Использование: /addDevice <device_id>");
            return;
          }
 
@@ -215,7 +235,7 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/my_devices",
+      {"/myDevices",
        [this](long chatId, const auto& args) {
          try {
            auto devices = database_->getUserDevices(chatId);
@@ -225,10 +245,26 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/alert_temp_high",
+      {"/removeDevice",
        [this](long chatId, const auto& args) {
          if (args.empty()) {
-           sendMessage(chatId, "❌ Использование: /alert_temp_high <значение>");
+           sendMessage(chatId, "❌ Использование: /removeDevice <device_id>");
+           return;
+         }
+
+         std::string deviceId = args[0];
+         try {
+           database_->removeUserDevice(chatId, deviceId);
+           sendMessage(chatId, "✅ Устройство `" + deviceId + "` удалено");
+         } catch (...) {
+           sendMessage(chatId, "❌ Ошибка удаления устройства");
+         }
+       }},
+
+      {"/setTempHigh",
+       [this](long chatId, const auto& args) {
+         if (args.empty()) {
+           sendMessage(chatId, "❌ Использование: /setTempHigh <значение>");
            return;
          }
 
@@ -246,10 +282,10 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/alert_temp_low",
+      {"/setTempLow",
        [this](long chatId, const auto& args) {
          if (args.empty()) {
-           sendMessage(chatId, "❌ Использование: /alert_temp_low <значение>");
+           sendMessage(chatId, "❌ Использование: /setTempLow <значение>");
            return;
          }
 
@@ -267,10 +303,10 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/alert_hum_high",
+      {"/setHumHigh",
        [this](long chatId, const auto& args) {
          if (args.empty()) {
-           sendMessage(chatId, "❌ Использование: /alert_hum_high <значение>");
+           sendMessage(chatId, "❌ Использование: /setHumHigh <значение>");
            return;
          }
 
@@ -288,10 +324,10 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/alert_hum_low",
+      {"/setHumLow",
        [this](long chatId, const auto& args) {
          if (args.empty()) {
-           sendMessage(chatId, "❌ Использование: /alert_hum_low <значение>");
+           sendMessage(chatId, "❌ Использование: /setHumLow <значение>");
            return;
          }
 
@@ -309,7 +345,7 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/show_alerts",
+      {"/showAlerts",
        [this](long chatId, const auto& args) {
          try {
            auto alert = database_->getUserAlert(chatId);
@@ -319,7 +355,7 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/clear_alerts",
+      {"/clearAlerts",
        [this](long chatId, const auto& args) {
          try {
            database_->clearUserAlerts(chatId);
@@ -329,28 +365,28 @@ void TelegramBotHandler::setupCommandHandlers() {
          }
        }},
 
-      {"/test_hot",
+      {"/testHot",
        [this](long chatId, const auto& args) {
          // Отправляем тестовые данные с высокой температурой
          alertService_->processTelemetryData("test_device", 35.0, 50.0);
          sendMessage(chatId, "🔥 Тестовые данные отправлены (35°C)");
        }},
 
-      {"/test_cold",
+      {"/testCold",
        [this](long chatId, const auto& args) {
          // Отправляем тестовые данные с низкой температурой
          alertService_->processTelemetryData("test_device", 10.0, 50.0);
          sendMessage(chatId, "❄️ Тестовые данные отправлены (10°C)");
        }},
 
-      {"/test_humid",
+      {"/testHumid",
        [this](long chatId, const auto& args) {
          // Отправляем тестовые данные с высокой влажностью
          alertService_->processTelemetryData("test_device", 22.0, 80.0);
          sendMessage(chatId, "💦 Тестовые данные отправлены (80% влажность)");
        }},
 
-      {"/test_dry",
+      {"/testDry",
        [this](long chatId, const auto& args) {
          // Отправляем тестовые данные с низкой влажностью
          alertService_->processTelemetryData("test_device", 22.0, 20.0);
@@ -373,6 +409,51 @@ void TelegramBotHandler::setupCommandHandlers() {
            sendMessage(chatId, "❌ Ошибка получения статистики");
          }
        }},
+
+      // Альтернативные имена команд (для обратной совместимости)
+      {"/testhot",
+       [this](long chatId, const auto& args) {
+         alertService_->processTelemetryData("test_device", 35.0, 50.0);
+         sendMessage(chatId, "🔥 Тестовые данные отправлены (35°C)");
+       }},
+
+      {"/testcold",
+       [this](long chatId, const auto& args) {
+         alertService_->processTelemetryData("test_device", 10.0, 50.0);
+         sendMessage(chatId, "❄️ Тестовые данные отправлены (10°C)");
+       }},
+
+      {"/testhumid",
+       [this](long chatId, const auto& args) {
+         alertService_->processTelemetryData("test_device", 22.0, 80.0);
+         sendMessage(chatId, "💦 Тестовые данные отправлены (80% влажность)");
+       }},
+
+      {"/testdry",
+       [this](long chatId, const auto& args) {
+         alertService_->processTelemetryData("test_device", 22.0, 20.0);
+         sendMessage(chatId, "🏜️ Тестовые данные отправлены (20% влажность)");
+       }},
+
+      {"/showalerts",
+       [this](long chatId, const auto& args) {
+         try {
+           auto alert = database_->getUserAlert(chatId);
+           sendMessage(chatId, utils::Formatter::formatAlertSettings(alert));
+         } catch (...) {
+           sendMessage(chatId, "❌ Ошибка получения настроек оповещений");
+         }
+       }},
+
+      {"/cleuralerts",
+       [this](long chatId, const auto& args) {
+         try {
+           database_->clearUserAlerts(chatId);
+           sendMessage(chatId, "🗑️ Все оповещения удалены");
+         } catch (...) {
+           sendMessage(chatId, "❌ Ошибка удаления оповещений");
+         }
+       }},
   };
 }
 
@@ -382,6 +463,7 @@ void TelegramBotHandler::sendMessage(long chatId, const std::string& text) {
     payload["chat_id"] = chatId;
     payload["text"] = text;
     payload["parse_mode"] = "Markdown";
+    payload["disable_web_page_preview"] = true;
 
     std::string url =
         "https://api.telegram.org/bot" + botToken_ + "/sendMessage";

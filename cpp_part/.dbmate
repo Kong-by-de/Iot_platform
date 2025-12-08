@@ -1,2 +1,2 @@
 DATABASE_URL="postgresql://iot_user:pass2025@localhost:5432/iot_devices"
-MIGRATIONS_DIR="/home/anderrated/cpp/iot_project/build/../db/migrations"
+MIGRATIONS_DIR="/home/anderrated/cpp/Iot_platform/cpp_part/build/../db/migrations"

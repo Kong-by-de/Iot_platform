@@ -104,9 +104,11 @@ IoT Platform — это связка сервисов, которая позво
 ## Технологический стек
 
 - C++17, CMake  
-- PostgreSQL + libpqxx  
+- PostgreSQL + libpqxx + dbmate
 - libcurl (SMTP), cpr (HTTP-клиент), OpenSSL  
 - Telegram Bot API  
 - GoogleTest (юнит-тесты)  
-- Опционально `yaml-cpp` для YAML-конфига  
+- Java 21
+- Netty для HTTP сервера
+- Maven для сборки
 
